@@ -420,7 +420,7 @@ else:
 
     # plot_to_base64 helper that tries to reduce size under 100_000 bytes
     helper = r'''
-    def plot_to_base64(max_bytes=99000):
+    def plot_to_base64(max_bytes=95000):
         buf = BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight', dpi=100)
         buf.seek(0)
@@ -531,7 +531,7 @@ You must:
    - "code": "..." (Python code that creates a dict called `results` with each question string as a key and its computed answer as the value)
 4. Your Python code will run in a sandbox with:
    - pandas, numpy, matplotlib available
-   - A helper function `plot_to_base64(max_bytes=100000)` for generating base64-encoded images under 100KB.
+   - A helper function `plot_to_base64(max_bytes=95000)` for generating base64-encoded images under 95KB.
 5. When returning plots, always use `plot_to_base64()` to keep image sizes small.
 6. Make sure all variables are defined before use, and the code can run without any undefined references.
 """),
@@ -692,7 +692,7 @@ async def analyze_data(request: Request):
                 "4) Produce a final JSON object with keys:\n"
                 '   - "questions": [ ... original question strings ... ]\n'
                 '   - "code": "..."  (Python code that fills `results` with exact question strings as keys)\n'
-                "5) For plots: use plot_to_base64() helper to return base64 image data under 100kB.\n"
+                "5) For plots: use plot_to_base64() helper to return base64 image data under 95kB.\n"
             )
         else:
             llm_rules = (
@@ -701,7 +701,7 @@ async def analyze_data(request: Request):
                 "2) Produce a final JSON object with keys:\n"
                 '   - "questions": [ ... original question strings ... ]\n'
                 '   - "code": "..."  (Python code that fills `results` with exact question strings as keys)\n'
-                "3) For plots: use plot_to_base64() helper to return base64 image data under 100kB.\n"
+                "3) For plots: use plot_to_base64() helper to return base64 image data under 95kB.\n"
             )
 
         llm_input = (
@@ -719,7 +719,11 @@ async def analyze_data(request: Request):
                 raise HTTPException(408, "Processing timeout")
 
         if "error" in result:
-            raise HTTPException(500, detail=result["error"])
+            logger.error(f"Analysis failed: {result['error']}")
+            if keys_list:
+                return JSONResponse({k: "can't find answer" for k in keys_list})
+            else:
+                return JSONResponse({"result": "can't find answer"})
 
         return JSONResponse(content=result)
 
@@ -729,7 +733,6 @@ async def analyze_data(request: Request):
         logger.exception("analyze_data failed")
         raise HTTPException(500, detail=str(e))
 
-        raise HTTPException(500, detail=str(e))
 
 def run_agent_safely_unified(
     llm_input: str,
@@ -830,22 +833,28 @@ def run_agent_safely_unified(
                     f"---ERROR START---\n{exec_result.get('message')}\n---ERROR END---\n"
                     f"Please generate a new, corrected Python code to answer the questions."
                 )
-
-        return {"error": last_error}
+  # If we reach here → all retries failed
+        logger.error(f"Final failure after retries: {last_error}")
+        if keys_list:
+            return {k: "can't find answer" for k in keys_list}
+        else:
+            return {"result": "can't find answer"}
 
     except Exception as e:
         logger.exception("run_agent_safely_unified failed")
-        return {"error": str(e)}
+        if keys_list:
+            return {k: "can't find answer" for k in keys_list}
+        else:
+            return {"result": "can't find answer"}
 
     finally:
-        # Clean up pickle/temp files only once at the very end
         for p in {pickle_path, injected_pickle_path}:
             if p and os.path.exists(p):
                 try:
                     os.unlink(p)
                 except Exception:
                     pass
-    
+                
 from fastapi.responses import FileResponse, Response
 import base64, os
 
